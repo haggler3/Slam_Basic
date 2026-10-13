@@ -110,29 +110,32 @@ After the first revisit, the robot keeps passing near old keyframes, so more `l_
 
 ## 7. Real examples from the committed run (seed 0)
 
-**Rover, first loop closure at t = 59.6 s.** The rover finishes its first lap and returns to where it started.
+**Rover, first loop closure at t = 60.0 s.** The rover finishes its first lap and returns to where it started.
+(Numbers below are read from the committed run.)
 
 ```
-  keyframes   x0 ─u0─ x1 ─ ... ─ x120 ─ ... ─ x148          (a keyframe every 0.4 s)
-                 │                               │
-                 └────────────── l1 ─────────────┘          ICP: inlier 0.8, overlap 0.8
-  position error  0.70 m  ───────────────────────▶  0.03 m  (one optimisation)
-  map             walls drawn twice, ~0.7 m apart ──▶ single walls
+  keyframes   x0 ─u0─ x1 ─u1─ x2 ─ ... ─────────────── x149 ─u149─ x150     (a keyframe every 0.4 s)
+               │                                                      │
+               └──────────────────────── l1 ──────────────────────────┘     "x150 is at x0"
+  position error   0.89 m  ──────────────────────────▶  0.015 m            (one optimisation)
+  map              walls drawn twice, ~0.9 m apart  ──▶  single walls
 ```
 
 By the end of the run the rover has accepted 20 loop closures `l1 … l20`, and the final optimisation brings its
 RMSE from 8.2 m (wheel odometry only) to 0.30 m.
 
-**Drone, first loop closure at t = 83 s.** The drone flies back through the rotunda it crossed at about t = 9 s.
+**Drone, first loop closure at t = 83.5 s.** The drone flies back through the rotunda it crossed at t = 10.8 s.
 
 ```
-  x(t=9s) ─── ... ~75 s of flight, 4 m path of drift correction needed ... ─── x(t=83s)
-     └──────────────────────────────── l1 ───────────────────────────────────────┘
-                      3D ICP against a sub-map around the old keyframe
+  x36 (t = 10.8 s) ─u36─ x37 ─ ... ~73 s of flight, 242 odometry edges ... ─ x277 ─u277─ x278 (t = 83.5 s)
+     │                                                                                       │
+     └───────────────────────────────────── l1 ──────────────────────────────────────────────┘
+                     3D ICP between today's scan and a sub-map around the old keyframe
 ```
 
-The drone's front-end was already accurate (0.26 m RMSE), so its 7 loop closures improve it only a little
-(0.21 m online). Loop closures matter most when the front-end drifts, as the rover's does.
+The drone's front-end was already accurate (0.26 m RMSE) and its error did not change at this first closure
+(0.10 m before and after), so its 7 loop closures improve the run only a little (0.21 m online). Loop closures matter
+most when the front-end drifts, as the rover's does.
 
 ## 8. What can go wrong
 
