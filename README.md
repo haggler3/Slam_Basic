@@ -16,6 +16,9 @@ container yard with cluttered lanes, a gantry crane, a pillar row) shared with f
 own map from simulated LiDAR and noisy odometry; the viewer shows the maps, the pose graphs, every loop closure, and
 how the error changes when the back-end optimises.
 
+> **New to graph SLAM?** Read the ASCII walkthrough: [`docs/HOW_SLAM_WORKS.md`](docs/HOW_SLAM_WORKS.md)
+> (odometry chain → drift → loop closure → optimisation, with examples from this run).
+
 ## How the SLAM works
 
 | | Rover (2D, SE(2)) | Drone (3D, SE(3)) |
