@@ -1,0 +1,38 @@
+{
+ "0": {
+  "rover_odom_rmse": 8.212,
+  "rover_front_rmse": 0.891,
+  "rover_online_rmse": 0.657,
+  "rover_opt_rmse": 0.301,
+  "drone_odom_rmse": 7.308,
+  "drone_front_rmse": 0.257,
+  "drone_online_rmse": 0.215,
+  "drone_opt_rmse": 0.224,
+  "rover_loops": 20,
+  "drone_loops": 7
+ },
+ "1": {
+  "rover_odom_rmse": 9.109,
+  "rover_front_rmse": 0.951,
+  "rover_online_rmse": 0.54,
+  "rover_opt_rmse": 0.234,
+  "drone_odom_rmse": 6.841,
+  "drone_front_rmse": 0.678,
+  "drone_online_rmse": 0.347,
+  "drone_opt_rmse": 0.512,
+  "rover_loops": 20,
+  "drone_loops": 7
+ },
+ "2": {
+  "rover_odom_rmse": 8.275,
+  "rover_front_rmse": 0.938,
+  "rover_online_rmse": 0.651,
+  "rover_opt_rmse": 0.239,
+  "drone_odom_rmse": 6.987,
+  "drone_front_rmse": 0.256,
+  "drone_online_rmse": 0.213,
+  "drone_opt_rmse": 0.213,
+  "rover_loops": 16,
+  "drone_loops": 7
+ }
+}
