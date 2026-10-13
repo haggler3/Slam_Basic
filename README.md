@@ -5,7 +5,11 @@ Three.js viewer and a scripted film of the whole run.
 
 ![preview](docs/preview.png)
 
-▶ **Film:** [`docs/slam_lab.mp4`](docs/slam_lab.mp4) — 100 s, 960×540, 6 MB (rendered by `tools/make_video.py`, then compressed with ffmpeg)
+[![Highlight: the rover closes a loop and the map snaps into place](docs/slam_lab_highlight.gif)](docs/slam_lab.mp4)
+
+▶ **Click the animation for the full 100 s film** ([`docs/slam_lab.mp4`](docs/slam_lab.mp4), 960×540, 6 MB; GitHub opens it in a player).
+The animation above is a 12 s excerpt: the rover recognises a place it has seen before (pink ring), the pose graph is
+re-optimised, and the error drops from decimetres to centimetres. Rendered by `tools/make_video.py`, then compressed with ffmpeg.
 
 Both robots fly/drive through **The Foundry**, a 28 × 28 m industrial hall (octagonal rotunda, shelving aisles,
 container yard with cluttered lanes, a gantry crane, a pillar row) shared with four moving obstacles. Each builds its
