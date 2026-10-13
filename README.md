@@ -50,134 +50,45 @@ Dead reckoning drifts to metres; the front-end alone stays near a metre; graph S
 ![seeds](docs/plots/seeds_rmse.png)
 ![loop closures](docs/plots/loop_closures.png)
 
-## The mathematics
+## The math, at a high level
 
-Notation: $`\mathbf{x}_i`$ is the pose of keyframe $`i`$ (SE(2): $`(x,y,\theta)`$; SE(3): rotation $`R_i\in SO(3)`$ and translation $`\mathbf t_i\in\mathbb R^3`$),
-$`\operatorname{wrap}(a)=a-2\pi\lfloor (a+\pi)/2\pi\rfloor`$, and $`\operatorname{Exp},\operatorname{Log}`$ are the exponential / logarithm maps between rotation
-vectors and rotations.
+No heavy derivations here, just the ideas each part of the code is built on.
 
-### 1. The pose graph (back-end)
+**1. Pose graph (the "graph" in graph SLAM).** Every keyframe is a node (a pose). Every measurement is an edge that says
+"node j is *this* far from node i". Odometry gives edges between neighbouring keyframes; loop closures give edges between
+places that were visited twice. The back-end finds the poses that disagree least with all edges at once, i.e. it minimises
 
-Each edge $`(i,j)`$ carries a measurement $`\mathbf z_{ij}`$ of the pose of node $`j`$ *in the frame of node $`i`$*:
-odometry edges (consecutive keyframes) take $`\mathbf z_{ij}`$ from the front-end, loop-closure edges from scan matching.
-With per-component standard deviations $`\boldsymbol\sigma_{ij}`$ the whitened residuals are
-
-```math
-\mathbf r_{ij}^{\text{SE(2)}}=\begin{bmatrix}
-R(\theta_i)^{\top}(\mathbf t_j-\mathbf t_i)-\mathbf z^{t}_{ij}\\
-\operatorname{wrap}\!\big(\theta_j-\theta_i-z^{\theta}_{ij}\big)\end{bmatrix}\,/\,\boldsymbol\sigma_{ij},
-\qquad
-\mathbf r_{ij}^{\text{SE(3)}}=\begin{bmatrix}
-R_i^{\top}(\mathbf t_j-\mathbf t_i)-\mathbf t_{ij}\\
-\operatorname{Log}\!\big(R_{ij}^{\top}R_i^{\top}R_j\big)\end{bmatrix}\,/\,\boldsymbol\sigma_{ij},
+```
+sum over edges of   ‖ predicted relative pose − measured relative pose ‖²  /  σ²
 ```
 
-and the maximum-a-posteriori trajectory solves the robust nonlinear least-squares problem
+(a robust Huber version, so one bad edge cannot wreck everything). It is a nonlinear least-squares problem, solved with
+Levenberg–Marquardt on a sparse system. Rotations are updated by composing small rotations, so there is no angle wrap-around.
 
-```math
-\mathbf X^{\star}=\arg\min_{\mathbf X}\sum_{(i,j)\in\mathcal E}\rho_H\!\big(\|\mathbf r_{ij}(\mathbf X)\|\big),
-\qquad
-\rho_H(u)=\begin{cases}\frac12u^2 & u\le k\\ k\,(u-\frac12k) & u>k\end{cases}\quad(k=3),
+**2. Rover front-end: scan matching on an occupancy grid.**
+- The map is a grid of log-odds (a number per cell: positive = probably occupied, negative = probably free). A LiDAR ray lowers the
+  cells it passes through and raises the cell it hits.
+- A pose is scored by how close the scan's end points land to occupied cells (a distance transform gives that distance), with a
+  Gaussian penalty for straying from the odometry prediction.
+- A particle filter proposes poses; an exhaustive local search around the best one polishes them.
+
+**3. Drone front-end: ICP.** Iterative Closest Point aligns the new 3D scan to the local voxel map. Each map point has a surface
+normal, and the cost is the squared distance of scan points *along those normals* ("point-to-plane"), minimised by repeatedly
+solving a small 6×6 linear system (3 rotation + 3 translation unknowns). A light pull toward the inertial prediction keeps it stable.
+
+**4. Loop closure.** When the robot is near an earlier keyframe (and has travelled far enough to make that meaningful), try ICP
+between the two scans from many starting offsets, keep the best, and accept it only if enough points agree, the two scans overlap
+in both directions, and the residual is small. The result becomes a new graph edge.
+
+**5. Dead reckoning vs SLAM.** Dead reckoning adds up noisy velocity measurements, so error grows without bound. SLAM re-uses the
+map to correct it. Quality is measured as the position RMSE against ground truth,
+
+```
+RMSE = sqrt( mean over time of  ‖ estimated position − true position ‖² )
 ```
 
-with node 0 held fixed (gauge freedom). The Huber loss $`\rho_H`$ limits the damage a wrong loop closure can do.
-Each iteration linearises around the current estimate, $`\mathbf r_{ij}(\mathbf X\oplus\boldsymbol\delta)\approx\mathbf r_{ij}+J_i\boldsymbol\delta_i+J_j\boldsymbol\delta_j`$,
-and solves the damped, IRLS-weighted normal equations (Levenberg–Marquardt)
-
-```math
-\Big(\sum_{(i,j)} w_{ij}\,J_{ij}^{\top}J_{ij}+\lambda\operatorname{diag}(H)\Big)\boldsymbol\delta=-\sum_{(i,j)} w_{ij}\,J_{ij}^{\top}\mathbf r_{ij},
-\qquad
-w_{ij}=\min\!\Big(1,\frac{k}{\|\mathbf r_{ij}\|}\Big),
-```
-
-a sparse system (each edge touches two nodes) solved with `scipy.sparse.linalg.spsolve`. $`\lambda`$ is divided by 5 after a successful step
-and multiplied by 10 after a rejected one. Updates use the retraction $`t\leftarrow t+\delta_t`$, $`R\leftarrow R\operatorname{Exp}(\boldsymbol\delta_\omega)`$, so there is no
-angle-wrapping singularity. Jacobians are formed by forward differences ($`\varepsilon=10^{-6}`$) per edge, vectorised over all edges.
-
-### 2. Rover front-end (2D)
-
-**Occupancy grid.** Every cell holds a log-odds value $`l=\log\frac{p}{1-p}`$. A ray from the sensor to a return updates the cells it crosses
-(free, $`\Delta l=-0.45`$) and the end cell (occupied, net $`\Delta l=+0.85`$), clamped to $`[-4,5]`$; occupancy is recovered as $`p=\sigma(l)=1/(1+e^{-l})`$.
-The *local* sub-map used for odometry additionally decays, $`l\leftarrow 0.985\,l`$ per scan, so it forgets after $`\approx 10`$ s — that is what makes the
-front-end an odometry that drifts, rather than a SLAM system that cannot.
-
-**Likelihood field.** With $`D(\mathbf q)`$ the Euclidean distance from $`\mathbf q`$ to the nearest occupied cell (an exact distance transform), the log-likelihood of a pose
-$`\mathbf x=(x,y,\theta)`$ given beam ranges $`r_b`$ at body angles $`\alpha_b`$ is
-
-```math
-\log\mathcal L(\mathbf x)=c\sum_b -\frac{\min\!\big(D(\mathbf q_b(\mathbf x)),d_{\max}\big)^2}{2\sigma_s^2},
-\qquad
-\mathbf q_b=\begin{bmatrix}x+r_b\cos(\theta+\alpha_b)\\ y+r_b\sin(\theta+\alpha_b)\end{bmatrix},
-```
-
-($`\sigma_s=0.15`$ m, $`d_{\max}=1`$ m, $`c=0.35`$ tempers over-confidence from correlated beams).
-
-**Particle filter.** Particles are propagated by the odometry increment $`(d,\Delta\theta)`$ plus noise
-$`\sigma_d=0.015+0.08|d|`$, $`\sigma_\theta=0.008+0.1|\Delta\theta|`$, weighted $`w^{(k)}\propto\exp\log\mathcal L(\mathbf x^{(k)})`$ and resampled
-(systematic) when $`N_{\text{eff}}=1/\sum_k (w^{(k)})^2<N/2`$.
-
-**Correlative scan matching.** The weighted mean is refined by exhaustive search over a window ($`\pm0.15`$ m in $`x,y`$; $`\pm0.06`$ rad in $`\theta`$) maximising
-
-```math
-\log\mathcal L(\mathbf x)\;-\;\frac12\Big(\frac{\|\mathbf t-\hat{\mathbf t}\|^2}{0.05^2}+\frac{\operatorname{wrap}(\theta-\hat\theta)^2}{0.02^2}\Big),
-```
-
-where $`(\hat{\mathbf t},\hat\theta)`$ is the pure-odometry prediction. The Gaussian prior is what stops the match sliding along featureless walls.
-
-### 3. Drone front-end (3D)
-
-**Point-to-plane ICP.** Voxel centres $`\mathbf q_i`$ of the local map carry a surface normal $`\mathbf n_i`$: the eigenvector of the smallest eigenvalue of the
-covariance of the 10 nearest neighbours, kept only if the neighbourhood is planar ($`\lambda_0<0.25\lambda_1`$). With scan points $`\mathbf p_i`$ and the unknown
-increment $`(R,\mathbf t)\approx(I+[\boldsymbol\omega]_\times,\ \mathbf t)`$, the cost
-
-```math
-E(\boldsymbol\omega,\mathbf t)=\sum_i\big(\mathbf n_i^{\top}(R\mathbf p_i+\mathbf t-\mathbf q_i)\big)^2
-\;\Rightarrow\;
-A_i=\big[(\mathbf p_i\times\mathbf n_i)^{\top},\ \mathbf n_i^{\top}\big],\quad r_i=\mathbf n_i^{\top}(\mathbf p_i-\mathbf q_i)
-```
-
-is minimised by $`\big(A^{\top}A+\Lambda\big)\mathbf x=-A^{\top}\mathbf r-\Lambda\,\mathbf c`$ where $`\mathbf x=(\boldsymbol\omega,\delta\mathbf t)`$ and
-$`\mathbf c`$ is the *total* correction so far relative to the inertial prediction. $`\Lambda=\operatorname{diag}(\mu_R I_3,\mu_t I_3)`$ ($`\mu_R=10`$, $`\mu_t=1`$)
-is a light prior that anchors ICP to the odometry. Eight iterations with a shrinking correspondence gate ($`1.0\to0.3`$ m) and 15 % residual trimming are run.
-
-**Inertial prediction.** Body velocity $`\mathbf v_b`$ and gyro $`\boldsymbol\omega_b`$ give $`R_{k+1}=R_k\operatorname{Exp}(\boldsymbol\omega_b\Delta t)`$ and
-$`\mathbf t_{k+1}=\mathbf t_k+R_k\mathbf v_b\Delta t`$. The simulated measurements are biased, $`\tilde{\mathbf v}=1.04\,\mathbf v+\mathbf b+\mathcal N(0,0.03^2)`$,
-which is why pure dead reckoning ends metres away.
-
-**Voxel map with clearing.** A voxel's count rises by one for every scan that hits it and it is displayed once the count reaches 5. For every stored voxel
-at range $`\rho`$ and bearing $`(\mathrm{az},\mathrm{el})`$ the nearest beam's measured range $`\rho_b`$ is looked up; if $`\rho_b>1.12\,\rho+0.8`$ the ray passed straight
-through the voxel, so its count is decremented. The range-proportional margin matters: a fixed margin deletes the floor, which is seen at grazing angles.
-
-### 4. Loop closure
-
-*Candidates:* nodes $`j`$ with at least $`G`$ keyframes and $`S`$ metres of travelled path ($`S=15`$ m rover, $`20`$ m drone) between them and
-$`\|\mathbf t_j-\mathbf t_n\|<`$ 3.5 / 4.5 m in the *current optimised* graph. *Registration:* from many initial offsets (rover: a $`5\times5\times3`$ grid
-over $`\pm1`$ m and $`\pm0.12`$ rad; drone: $`\pm2`$ m in $`x,y`$, $`\pm0.2`$ rad in yaw, plus $`\pm1.2`$ m in $`z`$) run point-to-point ICP, whose best rigid motion for matched
-sets $`\{\mathbf a_i\},\{\mathbf b_i\}`$ is the Kabsch solution
-
-```math
-H=\sum_i(\mathbf a_i-\bar{\mathbf a})(\mathbf b_i-\bar{\mathbf b})^{\top}=U\Sigma V^{\top},\quad
-R=V\operatorname{diag}\!\big(1,\dots,1,\det(VU^{\top})\big)U^{\top},\quad
-\mathbf t=\bar{\mathbf b}-R\bar{\mathbf a}.
-```
-
-The start with the highest inlier fraction wins. *Verification:* accept only if the inlier fraction (points within 0.12 m rover / 0.15 m drone) exceeds 0.6, the
-reverse overlap exceeds 0.45 (rover) / 0.22 (drone), the inlier RMS is below 0.075 / 0.11 m, and the correction to the predicted relative pose is bounded. The accepted
-$`(R,\mathbf t)`$ becomes an edge $`\mathbf z_{jn}`$ with $`\boldsymbol\sigma=(0.05\text{ m},0.02\text{ rad})`$ (rover) or $`(0.08,0.03)`$ (drone).
-
-### 5. Online estimate and map rebuild
-
-Let $`T_{\text{corr}}=\mathbf x_n^{\text{opt}}\circ(\mathbf x_n^{\text{front}})^{-1}`$ be the correction at the latest keyframe. The online pose of any later frame is
-$`T_{\text{corr}}\circ\mathbf x^{\text{front}}`$, and when a large correction occurs the global map is re-integrated from scratch: every stored scan $`k`$ is replayed with
-pose $`\mathbf x^{\text{opt}}_{\kappa(k)}\circ(\mathbf x^{\text{front}}_{\kappa(k)})^{-1}\circ\mathbf x^{\text{front}}_k`$, where $`\kappa(k)`$ is the keyframe that frame $`k`$ hangs off.
-
-### 6. Metric
-
-Because both robots start at a known pose, no trajectory alignment is needed and
-
-```math
-\operatorname{RMSE}=\sqrt{\frac1N\sum_{k=1}^{N}\big\|\hat{\mathbf p}_k-\mathbf p_k\big\|^2}.
-```
+**6. Rebuilding the map.** After the graph is corrected, every stored scan is replayed with its corrected pose into a fresh map,
+which is why walls that looked doubled snap into one.
 
 ## Run it
 
